@@ -1,0 +1,320 @@
+---
+title: Alberta Median Income Using R
+author: Mark Morin
+date: '2021-10-25'
+slug: []
+categories: []
+tags: []
+---
+
+<script src="{{< blogdown/postref >}}index_files/header-attrs/header-attrs.js"></script>
+
+
+<p>I ran across this article on the CBC website “<a href="https://www.cbc.ca/news/canada/calgary/alberta-2018-median-average-income-canada-provinces-1.5473881">Albertans still make the most money, but other provinces are catching up</a>” and it has the following chart:</p>
+<p><img src="https://i.cbc.ca/1.5473965.1582569001!/fileImage/httpImage/image.jpg_gen/derivatives/original_1180/median-income-2015-and-2018.jpg" /></p>
+<p>The size of the difference between Alberta and the other Canadian provinces surprises me, but it cites the relevant StatsCan Table so I should be able to reproduce this. Sounds like a nice challenge for my nascent R skills.</p>
+<p>I’m a complete beginner with R, so none of the following should be interpreted as best practice. In fact, in my first attempt at this, I’ll try to avoid using much beyond base R so that I have some idea of the value that the various libraries provide, and can decide whether or not I want to take them on as dependencies.</p>
+<p>Statistics Canada’s <a href="https://www.statcan.gc.ca/eng/developers/wds/user-guide">Web Data Service (WDS) User Guide</a> looks like the place to start. Right away I ran into trouble with the definitions for cubes, tables, and products - none of which match the table number referred to in CBC graphic “Table 11-10-0190-01”. I was able to use the <a href="https://www150.statcan.gc.ca/t1/wds/rest/getAllCubesListLite" class="uri">https://www150.statcan.gc.ca/t1/wds/rest/getAllCubesListLite</a> method to find the following:</p>
+<pre class="json"><code>{
+  &quot;productId&quot;: 11100190,
+  &quot;cansimId&quot;: &quot;206-0011&quot;,
+  &quot;cubeTitleEn&quot;: &quot;Market income, government transfers, total income, income tax and after-tax income by economic family type&quot;,
+  &quot;cubeTitleFr&quot;: &quot;Revenu du marché, transferts gouvernementaux, revenu total, impôt sur le revenu et revenu après impôt selon le type de famille économique&quot;,
+  &quot;cubeStartDate&quot;: &quot;1976-01-01&quot;,
+  &quot;cubeEndDate&quot;: &quot;2019-01-01&quot;,
+  &quot;releaseTime&quot;: &quot;2021-03-23T12:30&quot;,
+  &quot;archived&quot;: &quot;2&quot;,
+  &quot;subjectCode&quot;: [
+    &quot;11&quot;
+  ],
+  &quot;surveyCode&quot;: [
+    &quot;5200&quot;
+  ],
+  &quot;frequencyCode&quot;: 12,
+  &quot;corrections&quot;: []
+}</code></pre>
+<p>So the productId is the first 8 numbers from the table number the article cites. The documentation says “Product Identification number (PID) is a unique product identifier for all Statistics Canada products, including large multidimensional tables. The first two digits refer to a subject, the next two digits refer to product type, the last four digits refer to the product itself.” but I couldn’t find a list of the subjects, or product types anywhere. I was able to find <a href="https://www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1110019001" class="uri">https://www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1110019001</a>. Perhaps the 1110019001 productId refers to the webpage derived from the 11100190 table? There’s a lot I don’t understand here (vectors, coordinates), but let’s see if we can move forward anyways.</p>
+<p>The Web Data Services use guide has a number of suggested usage scenarios, almost all of which involve finding out what changed on a particular date, then retrieving a subset of each dataset based on that information. I suspect the target for this would be institutional users that use this to create an onsite copy of StatCan data they’re interested in. I think the methods that target entire tables, getfullTableDownloadCSV and getfullTableDownloadSDMX are the methods I’m interested in. <a href="https://sdmx.org/">SDMX - Statistical Data and Metadata eXchange</a> is a data format designed for the efficient exchange of statistical data and I imagine that this is will be the right way to go, but it also looks fairly complicated so I’ll still with csv for my first attempt.</p>
+<p>The url for table 11100190 is <a href="https://www150.statcan.gc.ca/t1/wds/rest/getFullTableDownloadCSV/11100190/en" class="uri">https://www150.statcan.gc.ca/t1/wds/rest/getFullTableDownloadCSV/11100190/en</a>. Note that there are different urls for french and english datasets. This url doesn’t return the data, rather it returns a url for a zip file.</p>
+<pre class="json"><code>{&quot;status&quot;:&quot;SUCCESS&quot;,&quot;object&quot;:&quot;https://www150.statcan.gc.ca/n1/tbl/csv/11100190-eng.zip&quot;}</code></pre>
+<pre class="r"><code># I don&#39;t want to abuse the statcan site so I&#39;m pulling from a cache if it&#39;s available
+cachePath = tools::R_user_dir(&quot;statcan&quot;, &quot;cache&quot;)
+cacheFilepath = file.path(cachePath, &quot;11100190.rds&quot;)
+if (file.exists(cacheFilepath)) {
+  table11100190 = readRDS(cacheFilepath)
+} else {
+  zipfile = tempfile()
+  download.file(&quot;https://www150.statcan.gc.ca/n1/tbl/csv/11100190-eng.zip&quot;, zipfile)
+  unzip(zipfile, exdir = dirname(zipfile))
+  table11100190 = read.csv(file.path(dirname(zipfile), &quot;11100190.csv&quot;))
+  dir.create(cachePath, recursive = TRUE, showWarnings = FALSE)
+  saveRDS(table11100190, cacheFilepath)
+}
+
+knitr::kable(head(table11100190[,1:5]))</code></pre>
+<table>
+<colgroup>
+<col width="8%" />
+<col width="6%" />
+<col width="14%" />
+<col width="17%" />
+<col width="53%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="right">REF_DATE</th>
+<th align="left">GEO</th>
+<th align="left">DGUID</th>
+<th align="left">Income.concept</th>
+<th align="left">Economic.family.type</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="right">1976</td>
+<td align="left">Canada</td>
+<td align="left">2016A000011124</td>
+<td align="left">Number of persons</td>
+<td align="left">Economic families and persons not in an economic family</td>
+</tr>
+<tr class="even">
+<td align="right">1976</td>
+<td align="left">Canada</td>
+<td align="left">2016A000011124</td>
+<td align="left">Number of persons</td>
+<td align="left">Economic families</td>
+</tr>
+<tr class="odd">
+<td align="right">1976</td>
+<td align="left">Canada</td>
+<td align="left">2016A000011124</td>
+<td align="left">Number of persons</td>
+<td align="left">Elderly families</td>
+</tr>
+<tr class="even">
+<td align="right">1976</td>
+<td align="left">Canada</td>
+<td align="left">2016A000011124</td>
+<td align="left">Number of persons</td>
+<td align="left">Elderly couples</td>
+</tr>
+<tr class="odd">
+<td align="right">1976</td>
+<td align="left">Canada</td>
+<td align="left">2016A000011124</td>
+<td align="left">Number of persons</td>
+<td align="left">Other elderly families</td>
+</tr>
+<tr class="even">
+<td align="right">1976</td>
+<td align="left">Canada</td>
+<td align="left">2016A000011124</td>
+<td align="left">Number of persons</td>
+<td align="left">Non-elderly families</td>
+</tr>
+</tbody>
+</table>
+<p>It’s not clear from the CBC article which Economic Family type is being used, but looking at the data, “Alberta Economic families and persons not in an economic family” seems to be the likeliest one.</p>
+<pre class="r"><code>knitr::kable(table11100190[table11100190$REF_DATE==2015 &amp; 
+                      table11100190$`Income.concept`==&quot;Median after-tax income&quot; &amp;
+                      table11100190$GEO==&quot;Alberta&quot; &amp;
+                      !is.na(table11100190$VALUE), 
+                      c(&quot;REF_DATE&quot;, &quot;GEO&quot;, &quot;Economic.family.type&quot;, &quot;VALUE&quot;)])</code></pre>
+<table>
+<colgroup>
+<col width="8%" />
+<col width="10%" />
+<col width="9%" />
+<col width="64%" />
+<col width="8%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="left"></th>
+<th align="right">REF_DATE</th>
+<th align="left">GEO</th>
+<th align="left">Economic.family.type</th>
+<th align="right">VALUE</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">199421</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Economic families and persons not in an economic family</td>
+<td align="right">76600</td>
+</tr>
+<tr class="even">
+<td align="left">199422</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Economic families</td>
+<td align="right">102600</td>
+</tr>
+<tr class="odd">
+<td align="left">199423</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Elderly families</td>
+<td align="right">68600</td>
+</tr>
+<tr class="even">
+<td align="left">199424</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Elderly couples</td>
+<td align="right">67700</td>
+</tr>
+<tr class="odd">
+<td align="left">199425</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Other elderly families</td>
+<td align="right">72500</td>
+</tr>
+<tr class="even">
+<td align="left">199426</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Non-elderly families</td>
+<td align="right">108000</td>
+</tr>
+<tr class="odd">
+<td align="left">199427</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Couples</td>
+<td align="right">105600</td>
+</tr>
+<tr class="even">
+<td align="left">199428</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Couples with children</td>
+<td align="right">113500</td>
+</tr>
+<tr class="odd">
+<td align="left">199429</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Couples with other relatives</td>
+<td align="right">147500</td>
+</tr>
+<tr class="even">
+<td align="left">199430</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Lone-parent families</td>
+<td align="right">59400</td>
+</tr>
+<tr class="odd">
+<td align="left">199431</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Male lone-parent families</td>
+<td align="right">81300</td>
+</tr>
+<tr class="even">
+<td align="left">199432</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Female lone-parent families</td>
+<td align="right">52800</td>
+</tr>
+<tr class="odd">
+<td align="left">199433</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Other non-elderly families</td>
+<td align="right">91000</td>
+</tr>
+<tr class="even">
+<td align="left">199434</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Persons not in an economic family</td>
+<td align="right">40200</td>
+</tr>
+<tr class="odd">
+<td align="left">199435</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Elderly persons not in an economic family</td>
+<td align="right">33400</td>
+</tr>
+<tr class="even">
+<td align="left">199436</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Elderly males not in an economic family</td>
+<td align="right">36800</td>
+</tr>
+<tr class="odd">
+<td align="left">199437</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Elderly females not in an economic family</td>
+<td align="right">31000</td>
+</tr>
+<tr class="even">
+<td align="left">199438</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Non-elderly persons not in an economic family</td>
+<td align="right">42300</td>
+</tr>
+<tr class="odd">
+<td align="left">199439</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Non-elderly males not in an economic family</td>
+<td align="right">47300</td>
+</tr>
+<tr class="even">
+<td align="left">199440</td>
+<td align="right">2015</td>
+<td align="left">Alberta</td>
+<td align="left">Non-elderly females not in an economic family</td>
+<td align="right">37300</td>
+</tr>
+</tbody>
+</table>
+<p>A slight difference between the data in the CBC graphic and what we’re working with, is that they’re using data in “2018 constant dollars” and as of the time I’m writing this, that data set is reporting “2019 constant dollars”. I could convert but it’s probably not important for what I’m trying to do.</p>
+<p>The Statcan dataset has a lot more information than just provincial data. It has data for most of the major cities, and data aggregated for some of the regions. So, in additional to filtering by Economic family type, and Income concept, we need to filter by GEO.</p>
+<p>Putting all this together, I can make my first attempt a the chart.</p>
+<pre class="r"><code>provinces &lt;- c(&quot;Canada&quot;, &quot;British Columbia&quot;, &quot;Alberta&quot;, &quot;Saskatchewan&quot;, &quot;Manitoba&quot;, &quot;Ontario&quot;, &quot;Quebec&quot;, &quot;New Brunswick&quot;, &quot;Nova Scotia&quot;, &quot;Prince Edward Island&quot;, &quot;Newfoundland and Labrador&quot;)
+
+medianincome = table11100190[(table11100190$REF_DATE == 2015 | table11100190$REF_DATE == 2018) &amp;
+                        table11100190$`Economic.family.type` == &quot;Economic families and persons not in an economic family&quot; &amp;
+                        table11100190$`Income.concept` == &quot;Median after-tax income&quot; &amp;
+                        table11100190$GEO %in% provinces, ]
+
+barplot(VALUE ~ REF_DATE + GEO, medianincome, beside = TRUE)</code></pre>
+<p><img src="{{< blogdown/postref >}}index_files/figure-html/unnamed-chunk-3-1.png" width="672" /></p>
+<p>Note the use of the ~ in the call to barplot. This is the “formula method” for creating barplots which, although being first method mentioned in the online help, doesn’t seem to show up in a lot of samples on the web.</p>
+<p>The biggest problem is that most of the province names are hidden to avoid overwriting each other. The CBC chart wisely uses abbreviations to avoid this.</p>
+<pre class="r"><code>abbrev = c(&quot;CAN&quot;, &quot;BC&quot;, &quot;AB&quot;, &quot;SK&quot;, &quot;MB&quot;, &quot;ON&quot;, &quot;QC&quot;, &quot;NS&quot;, &quot;NB&quot;, &quot;PEI&quot;, &quot;NL&quot;);
+
+provabbreviations &lt;- data.frame(GEO = provinces, Abbrev = abbrev)
+medianincome2 &lt;- merge(medianincome, provabbreviations)
+
+barplot(VALUE ~ REF_DATE + Abbrev, medianincome2, beside = TRUE)</code></pre>
+<p><img src="{{< blogdown/postref >}}index_files/figure-html/unnamed-chunk-4-1.png" width="672" />
+This gets rid of the overlapping names, but it doesn’t respect the order I had in my provinces data frame. The R approach (at least in Base R) is to create the abbreviations as a “factor” and specify a level with the correct order.</p>
+<pre class="r"><code>provabbreviations &lt;- data.frame(GEO = provinces, Abbrev = factor(abbrev, levels = abbrev))
+medianincome2 &lt;- merge(medianincome, provabbreviations)
+
+barplot(VALUE ~ REF_DATE + Abbrev, medianincome2, beside = TRUE)</code></pre>
+<p><img src="{{< blogdown/postref >}}index_files/figure-html/unnamed-chunk-5-1.png" width="672" /></p>
+<p>I spend quite a while playing with the various settings trying to get as close to the CBC chart as possible, and I’m sure someone who knows more about R plots could vastly improve this, but here’s what I came up with.</p>
+<pre class="r"><code># mar order is bottom, left, top, and right. The default is c(5.1, 4.1, 4.1, 2.1) lines of text
+# inset is fraction of chart
+par(mar = c(5.1, 4.1, 6.1, 2.1), xpd = TRUE)
+barplot(VALUE~REF_DATE + Abbrev, medianincome2, beside = TRUE, col = c(&quot;red&quot;, &quot;blue&quot;), 
+        border = NA, xlab = NA, ylab = NA, yaxt=&quot;n&quot;)
+axis(2, las = 1, at = c(0, 10000, 30000, 50000, 70000))
+title(main = &quot;Median after-tax income, by province&quot;, sub = &quot;Source : StatCan Table 11-10-0190-01&quot;, adj = &quot;0&quot;)
+legend(&quot;topleft&quot;, inset = c(0, -0.2), legend = c(&quot;2015&quot;, &quot;2018&quot;), fill = c(&quot;red&quot;, &quot;blue&quot;), border = NA, horiz = TRUE, bty = &quot;n&quot;)</code></pre>
+<p><img src="{{< blogdown/postref >}}index_files/figure-html/unnamed-chunk-6-1.png" width="672" />
+Not bad, although I found it quite difficult to find all the right levers and knobs to get what I wanted. Next time I’ll try and do the same thing, this time leveraging libraries to import, manipulate the data, and produce the chart.</p>
