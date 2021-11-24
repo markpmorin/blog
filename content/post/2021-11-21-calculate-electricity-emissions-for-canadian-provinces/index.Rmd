@@ -1,0 +1,224 @@
+---
+title: Calculate Electricity Emissions for Canadian Provinces
+author: R package build
+date: '2021-11-21'
+slug: []
+categories: []
+tags: []
+draft: true
+---
+```{r setup, message=FALSE, warning=FALSE}
+library(cansim)
+library(tidyverse)
+```
+In my previous post the different emission intensity of the provinces' grid turned out to be really important when evaluating the carbon footprint of heat pumps, and to a much lessor extent, battery electric vehicles. Here's my attempt at calculating this myself. I'm sure this has been done elsewhere, but that's true about most everything I'm putting in these posts. It's about the journey, not the destination.
+
+It turns out Statistics Canada has a data table "25-10-0017 Electric power generation, annual fuel consumed by electric utility thermal plants" that has the fuel consumption for the various plants. Table "25-10-0021 Electric power, electric utilities and industry, annual supply and disposition" has the power consumption. Or we could probably use "25-10-0019
+Electricity from fuels, annual generation by electric utility thermal plants" if we wanted to do this on a per fuel basis. Finally we need emission factors for the various fuels. I couldn't find a machine friendly source for this, but <https://donnees.ec.gc.ca/data/substances/monitor/canada-s-official-greenhouse-gas-inventory/Emission_Factors.pdf> seems to have all the details we need.
+
+Also we need to convert those CH4 and N2O factors to CO2 equivalents. <https://www.canada.ca/en/environment-climate-change/services/climate-change/greenhouse-gas-emissions/quantification-guidance/global-warming-potentials.html> has this information, which comes from the IPCC's Fourth Assessment report using the 100yr time horizon.
+
+I had to make some guesses as to what some of the fuels named in table 25-10-0017. Who knows, maybe someone with actual knowledge of this stuff will drop a hint.
+
+```{r warning=FALSE, message=FALSE}
+
+# from https://donnees.ec.gc.ca/data/substances/monitor/canada-s-official-greenhouse-gas-inventory/Emission_Factors.pdf
+# using values for electric utilities. If a value is valid for all provinces, create an entry for each province.
+# Name and have been adjusted to match those used in table 25-10-0017. Conversion factor to match units.
+
+# Table A6.1–1 for marketable
+# Table A6.1–3 for CH4 and N2O emission factors
+# 0.000,001 as the conversion factor seems 1000 times too small. We're trying to get to kg/MWh. If unit from 
+# Table A6.1-1 is g/m3 and val_norm from Table 25-10-0017 is m3 then to get kg we g/m3 x 1 kg / 1000g 
+# That's why this is draft right now
+natgas_emission_factors <- data.frame(fuel = "Natural gas",
+                               unit = "g/m3",
+                               conversionfactor = 0.000001,
+                               province = c("NL", "NS", "NB", "QC", "ON", "MB", "SK", "AB", "BC", "YT", "NT"),
+                               co2 = c(1901, 1901, 1901, 1887, 1888, 1886, 1829, 1928, 1926, 1901, 1901),
+                               ch4 = 0.49,
+                               n2o = 0.049)
+
+# I'm not sure what the difference between methane and natural gas is from an emissions perspective. Maybe this is biogas?
+# Not that I'd know what to do with biogas either
+methane_emission_factors <- data.frame(fuel = "Methane",
+                               unit = "g/m3",
+                               conversionfactor = 0.000001,
+                               province = c("QC", "ON", "AB", "BC"),
+                               co2 = c(1887, 1888, 1928, 1926),
+                               ch4 = 0.49,
+                               n2o = 0.049)
+
+# I don't know what "Oother gaseous fuel" is, but BC and Alberta have a lot of it
+# Is it biogas? I'm using the same factors as Natural gas
+other_gaseous_emission_factors <- data.frame(fuel = "Other gaseous fuels",
+                               unit = "g/m3",
+                               conversionfactor = 0.000001,
+                               province = c("AB", "BC"),
+                               co2 = c(1928, 1926),
+                               ch4 = 0.49,
+                               n2o = 0.049)
+
+# conversion factor for tonne/kilolitre
+light_fuel_oil_emission_factor <- data.frame(fuel = "Light fuel oil",
+                                                 unit = "g/L",
+                                                 conversionfactor = 0.001,
+                                                 province = c("NL", "NS", "NB", "QC", "ON", "MB", "SK", "AB", "BC", "YT", "NT", "PE"),
+                                                 co2 = 2753,
+                                                 ch4 = 0.18,
+                                                 n2o = 0.031)
+
+# conversion factor for tonne/kilolitre
+heavy_fuel_oil_emission_factor <- data.frame(fuel = "Canadian heavy fuel oil",
+                               unit = "g/L",
+                               conversionfactor = 0.001,
+                               province = c("NL", "NS", "NB", "QC", "ON", "MB", "SK", "AB", "BC", "YT", "NT", "PE"),
+                               co2 = 3156,
+                               ch4 = 0.034,
+                               n2o = 0.064)
+
+# conversion factor for tonne/kilolitre
+imported_fuel_oil_emission_factor <- data.frame(fuel = "Imported heavy fuel oil",
+                               unit = "g/L",
+                               conversionfactor = 0.001,
+                               province = c("NL", "NS", "NB", "QC", "ON", "MB", "SK", "AB", "BC", "YT", "NT", "PE"),
+                               co2 = 3156,
+                               ch4 = 0.034,
+                               n2o = 0.064)
+
+diesel_emission_factor <- data.frame(fuel = "Diesel",
+                               unit = "g/L",
+                               conversionfactor = 0.001,
+                               province = c("NL", "NS", "NB", "QC", "ON", "MB", "SK", "AB", "BC", "YT", "NT", "NU", "PE"),
+                               co2 = 2681,
+                               ch4 = 0.078,
+                               n2o = 0.022)
+
+# Table A6.6–1: Emission Factors for Biomass
+# conversion factor is for tonne/tonne
+wood_emission_factor <- data.frame(fuel = "Wood",
+                                   unit = "g/kg",
+                                   conversionfactor = 0.001,
+                                   province = c("NL", "NS", "NB", "QC", "ON", "MB", "SK", "AB", "BC", "YT", "NT", "PE"),
+                                   co2 = 1715,
+                                   ch4 = 0.1,
+                                   n2o = 0.07)
+
+# using wood emission factors for "Other solid fuels"
+other_solid_emission_factor <- data.frame(fuel = "Other solid fuels",
+                                   unit = "g/kg",
+                                   conversionfactor = 0.001,
+                                   province = c("NL", "NS", "NB", "QC", "ON", "MB", "SK", "AB", "BC", "YT", "NT", "PE"),
+                                   co2 = 1715,
+                                   ch4 = 0.1,
+                                   n2o = 0.07)
+
+# Table A6.1–9: CO2 Emission Factors for Coal
+# Table A6.1–11: CH4 and N2O Emission Factors for Coal
+bitumous_emission_factor <- data.frame(fuel = "Canadian bituminous coal",
+                                      unit = "kg/tonne",
+                                      conversionfactor = 0.001,
+                                      province = c("NL", "NS", "NB", "QC", "ON", "SK", "AB", "BC"),
+                                      co2 = c(2185, 2329, 2198, 2198, 2198, 2198, 2198, 2198),
+                                      ch4 = 0.02,
+                                      n2o = 0.03)
+
+subbitumous_emission_factor <- data.frame(fuel = "Canadian subbituminous coal",
+                                          unit = "kg/tonne",
+                                          conversionfactor = 0.001,
+                                          province = "AB",
+                                          co2 = 1763,
+                                          ch4 = 0.02,
+                                          n2o = 0.03)
+
+#	Imported subbituminous coal - using foreign bitumous since that seems to be where NB gets their coal
+imported_sub_emission_factor <- data.frame(fuel = "Imported subbituminous coal",
+                                          unit = "kg/tonne",
+                                          conversionfactor = 0.001,
+                                          province = c("NS","NB", "ON", "MB"),
+                                          co2 = 2540,
+                                          ch4 = 0.02,
+                                          n2o = 0.03)
+
+#	Imported subbituminous coal - using foreign bitumous since that seems to be where NS gets their coal
+imported_bit_emission_factor <- data.frame(fuel = "Imported bituminous coal",
+                                          unit = "kg/tonne",
+                                          conversionfactor = 0.001,
+                                          province = "NS",
+                                          co2 = 2540,
+                                          ch4 = 0.02,
+                                          n2o = 0.03)
+
+lignite_emission_factor <- data.frame(fuel = "Lignite",
+                                          unit = "kg/tonne",
+                                          conversionfactor = 0.001,
+                                          province = "SK",
+                                          co2 = 1457,
+                                          ch4 = 0.02,
+                                          n2o = 0.03)
+
+petroleum_coke_emission_factor <- data.frame(fuel = "Petroleum coke",
+                                          unit = "g/L",
+                                          conversionfactor = 0.001,
+                                          province = c("NS", "NB"),
+                                          co2 = 3761,
+                                          ch4 = 0,
+                                          n2o = 24)
+
+emission_factors <- rbind(natgas_emission_factors, 
+                          methane_emission_factors,
+                          other_gaseous_emission_factors,
+                          light_fuel_oil_emission_factor,
+                          heavy_fuel_oil_emission_factor,
+                          imported_fuel_oil_emission_factor,
+                          diesel_emission_factor,
+                          wood_emission_factor,
+                          other_solid_emission_factor,
+                          bitumous_emission_factor,
+                          subbitumous_emission_factor,
+                          imported_sub_emission_factor,
+                          imported_bit_emission_factor,
+                          lignite_emission_factor,
+                          petroleum_coke_emission_factor)
+
+fuels <- get_cansim("25-10-0017")
+greenhouse <- get_cansim("38-10-0111")
+fuels <- add_provincial_abbreviations(fuels)
+generation <- get_cansim("25-10-0021")
+generation <- add_provincial_abbreviations(generation)
+
+fuels <- fuels %>% filter(!grepl("Total.+", `Fuel consumed for electric power generation`), 
+                          GEO.abb != "CAN", !is.na(val_norm), 
+                          REF_DATE == 2020,
+                          val_norm != 0) %>%
+  left_join(emission_factors, by = c("Fuel consumed for electric power generation" = "fuel", "GEO.abb" = "province"))
+
+# goal of conversion factor is to get tonnes of CO2e
+fuels <- fuels %>% mutate(co2_tonne = val_norm * conversionfactor * co2,
+                          ch4_tonne = val_norm * conversionfactor * ch4 * 25,
+                          n2o_tonne = val_norm * conversionfactor * n2o * 298,
+                          total_emissions = co2_tonne + ch4_tonne + n2o_tonne)
+
+province_emissions <- fuels %>% filter(!is.na(co2_tonne)) %>% group_by(GEO.abb) %>% summarize(total_emissions = sum(total_emissions))
+intensity <- generation %>% filter(`Electric power, components` == "Total generation of electricity", REF_DATE == 2020, GEO != "Canada") %>%
+  left_join(province_emissions) %>% mutate(tonnes_per_mwh = total_emissions / val_norm)
+
+knitr::kable(intensity)
+```
+```{r}
+# attempt to calculate portion of CO2/MWh from each fuel source. I'm not sure how to visualize this. I'd like to do something where I show 
+# how much more carbon is emitted by coal vs CO2 use real historical data
+fromfuels <- get_cansim("25-10-0019")
+fromfuels <- add_provincial_abbreviations(fromfuels)
+lastyear <- max(fromfuels$REF_DATE)
+toplevel <- fromfuels %>% filter(GEO != "Canada",
+                                 val_norm != 0,
+                                 !is.na(val_norm),
+                                  !grepl("\\.", `Hierarchy for Electricity generated from fuels`))
+
+toplevel <- toplevel %>% group_by(GEO.abb) %>% mutate(percentage = val_norm/sum(val_norm)) %>% ungroup()
+
+ggplot(toplevel) +
+  geom_line(mapping = aes(x = REF_DATE, y = percentage, group = GEO.abb, fill = `Electricity generated from fuels`))
+```
+```

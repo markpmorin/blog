@@ -1,0 +1,227 @@
+---
+title: Carbon Tax Influence on Purchase Decisions for Alberta
+author: R package build
+date: '2021-11-11'
+slug: []
+categories: []
+tags: []
+---
+
+My main reason for trying to familiarize myself with the various data sources is that I'm constantly asking myself as I watch the local or international news - "is that true in Alberta?". Not we're special in a global sense, but when there's some professor in California saying our energy needs are a solved problem, and all we have to do is put solar panels on our roof - and I find myself asking "is that true in Alberta?".
+
+Natural Resources Canada has a tool called [RETScreen](https://www.nrcan.gc.ca/maps-tools-and-publications/tools/modelling-tools/retscreen/7465) and you should probably use that, but I'm going to try and do this analysis myself. It's about the journey, not the destination.
+
+Just to acknowledge my priors, I do believe in climate change - I've worked through Coursera's [Global Warming I: The Science and Modeling of Climate Change](https://www.coursera.org/learn/global-warming) and edX's [Energy Within Environmental Constraints](https://www.edx.org/course/energy-within-environmental-constraints). If you're not convinced I'd encourage you to work through the modeling course. I think a carbon tax is likely the best mechanism to efficiently allow society to identify the most cost effective way of avoiding carbon costs.
+
+The problem with a carbon tax is that people are busy and don't have time to figure when the carbon tax should influence them to change their behavior. They've always purchased ICE vehicles, they've always heated their house with natural gas furnaces etc. Larger companies can hire people to figure this out, but for small companies and individual households it's difficult. And if you're like me you find yourself asking the question "is that true in Albert?".
+
+```{r setup, warning=FALSE, message=FALSE}
+library(cansim)
+library(tidyverse)
+```
+
+So let's try and figure that out. Maybe I'll even use one or two of these government data sets that I've spent the last few weeks figuring out how to access. Just to be clear, this analysis is an attempt to figure out, on a purely economic basis, at what level of carbon tax it's time to take action.
+
+There's a wide mix in how people live, but in broad strokes, [most Albertan households are single-family dwellings](https://www12.statcan.gc.ca/census-recensement/2016/as-sa/98-200-x/2016005/98-200-x2016005-eng.cfm). Most houses in Alberta are heated with natural gas furnaces.
+
+```{r message=FALSE}
+heating_systems <- get_cansim("38-10-0286")
+heating_systems <- add_provincial_abbreviations(heating_systems)
+max_ref_date <- max(heating_systems$REF_DATE)
+
+# Note: it seems that there are at least two hierarchies in this dataset
+# we're pulling the fuel type at a mid level of granularity
+# there probably a better way of doing that
+heating_systems_fuel_type <- heating_systems %>% 
+  filter(REF_DATE==max_ref_date, 
+         UOM=="Percent", 
+         !is.na(val_norm),
+         !is.na(GEO.abb),
+         grepl("^40\\.\\d+$", `Hierarchy for Primary heating system and type of energy`)) 
+
+ggplot(heating_systems_fuel_type) +
+  geom_col(mapping = aes(x = GEO.abb, y = val_norm, fill = `Primary heating system and type of energy`)) +
+  labs(title = "Primary heating systems type of energy",
+    subtitle = paste0("For ", max_ref_date),
+    caption = "Source : Statistics Canada. Table 38-10-0286 Primary heating systems and type of energy",
+    y = "Percent") +
+  theme_bw() +
+  theme(plot.title = element_text(face = "bold", size = "14"), 
+      legend.title = element_blank(), # remove REF_DATE from legend
+      axis.title.x = element_blank(), # remove ABBREV from x-axis
+      legend.position = "top", 
+      legend.justification = "left",
+      panel.grid.major.x = element_blank() # remove x-grid
+      ) 
+
+#household_consumption <- get_cansim("36-10-0225")
+
+```
+As you can see, the vast majority of Alberta homes are heated with natural gas. I'm not sure why the totals for some provinces don't add up to 100%. Does that mean they don't have a heating system? Maybe they just don't have quality data for some portion?
+
+Here's the other hierarchy in that dataset. The actual type of system used to heat the home.
+
+```{r}
+# here's the second hierarchy
+heating_systems_system <- heating_systems %>% 
+  filter(REF_DATE==max_ref_date, 
+         UOM=="Percent", 
+         !is.na(val_norm),
+         !is.na(GEO.abb),
+         !grepl("^40", `Hierarchy for Primary heating system and type of energy`),
+         !grepl("\\.", `Hierarchy for Primary heating system and type of energy`)) 
+
+ggplot(heating_systems_system) +
+  geom_col(mapping = aes(x = GEO.abb, y = val_norm, fill = `Primary heating system and type of energy`)) +
+  labs(title = "Primary heating systems",
+    subtitle = paste0("For ", max_ref_date),
+    caption = "Source : Statistics Canada. Table 38-10-0286 Primary heating systems and type of energy",
+    y = "Percent") +
+  theme_bw() +
+  theme(plot.title = element_text(face = "bold", size = "14"), 
+      legend.title = element_blank(), # remove REF_DATE from legend
+      axis.title.x = element_blank(), # remove ABBREV from x-axis
+      legend.position = "top", 
+      legend.justification = "left",
+      panel.grid.major.x = element_blank() # remove x-grid
+      ) 
+```
+You can have forced air electric furnaces and in Quebec that represents 60 of their forced air furnace number. In Alberta 91% of forced air furnaces are natural gas. The high percentage of heat pumps in the maritime provinces is a surprise to me - as far as I know the really efficient ones are quite new, relying on variable speed motors enabled by newer solid state power electronics. I wonder if this is a recent switch? I suppose if you're coming from electric radiant heating and you're in a milder climate, this is an easy choice.
+
+```{r message=FALSE}
+energy_consumption <- get_cansim("25-10-0060")
+energy_consumption <- add_provincial_abbreviations(energy_consumption)
+
+max_ref_date <- max(energy_consumption$REF_DATE)
+energy_consumption <- energy_consumption %>% filter(REF_DATE == max_ref_date, `Energy consumption`=="Gigajoules per household", `Energy type` != "Total, all energy types", !is.na(val_norm)) %>% select(GEO.abb, `Energy type`, val_norm, UOM)
+
+
+ggplot(energy_consumption) +
+  geom_col(mapping = aes(x = GEO.abb, y = val_norm, fill = `Energy type`)) +
+  labs(title = "Household energy consumption",
+    subtitle = paste0("For ", max_ref_date),
+    caption = "Source : Statistics Canada. Table 25-10-0060-01",
+    y = "GJ") +
+  theme_bw() +
+  theme(plot.title = element_text(face = "bold", size = "14"), 
+      legend.title = element_blank(), # remove REF_DATE from legend
+      axis.title.x = element_blank(), # remove ABBREV from x-axis
+      legend.position = "top", 
+      legend.justification = "left",
+      panel.grid.major.x = element_blank() # remove x-grid
+      ) 
+```
+Let's see if we can calculate try and turn this into $/GJ at different carbon tax rates. I thought it would be useful to try and compare the different fuels. should figure out how to extract data from nrcan.gc.ca. Conversion factors from https://apps.cer-rec.gc.ca/Conversion/conversion-tables.aspx?GoCTemplateCulture=en-CA
+
++-----------------------+-------+---------+---------+-------+--------------+-------------+-------+----------------+
+| Fuel                  | ¢/l   | GJ/l    | \$/kWh  | \$/GJ | kg CO2e per | Fuel Charge  | kg/GJ | $Carbon Tax/GJ |
+|                       |       |         |         |       | Standard UOM | @\$40/tonne |       |                |
++=======================+======:+========:+========:+======:+=============:+============:+======:+===============:+
+| Electricity (Alberta) |       |         | 0.08966 | 24.9  | 0.57/MWh*    | \$22.8/kWh  | 158   | 6.3            |
++-----------------------+-------+---------+---------+-------+--------------+-------------+-------+----------------+
+| Natural Gas           |       |         |         | 5.328 | 50/GJ        | \$2.1/GJ    | 50    | 2.1            |
++-----------------------+-------+---------+---------+-------+--------------+-------------+-------+----------------+
+| Heating Oil (Halifax) | 125.9 | 0.03672 |         | 34.29 | 2.68/l       | \$0.1073/l  | 73    | 2.9            |
++-----------------------+-------+---------+---------+-------+--------------+-------------+-------+----------------+
+| Heating Oil (Toronto) | 163.2 | 0.03672 |         | 44.44 | 2.68/l       | \$0.1073/l  | 73    | 2.9            |
++-----------------------+-------+---------+---------+-------+--------------+-------------+-------+----------------+
+| Gasoline (Calgary)    | 141.7 | 0.03466 |         | 40.88 | 2.31/l       | \$0.0884/l  | 67    | 2.6            |
++-----------------------+-------+---------+---------+-------+--------------+-------------+-------+----------------+
+| Diesel                | 135.9 | 0.03868 |         | 35.13 | 2.68/l       | \$0.1073/l  | 69    | 2.9            |
++-----------------------+-------+---------+---------+-------+--------------+-------------+-------+----------------+
+
+Prices as of Nov 18 2021 from https://www2.nrcan.gc.ca/eneene/sources/pripri/prices_bycity_e.cfm. 
+Fuel charges from <https://www.canada.ca/en/revenue-agency/services/forms-publications/publications/fcrates/fuel-charge-rates.html>
+Natural gas is converted from m3 by \$0.0783/m3 * 26.853 m3/GJ = $2.1/GJ 
+Alberta electricity carbon tax for electricity in Alberta is from [Carbon Offset Emmisions Handbook](https://open.alberta.ca/publications/9781460146064).
+
+Total household carbon taxes for Alberta are roughly 24.8 x 6.3 = 156, + 100.3 x 2.1 = 211 for a total of \$367/yr.
+
+Manitoba hydro has a nice document comparing the the various alternatives and their climate and prices seem close enough to ours that it's similar for Alberta <https://www.hydro.mb.ca/your_home/heating_and_cooling/space_heating_costs.pdf>. So for a green energy solution, heat pumps, either air or ground source, seem to be the only solution. <https://www.nrcan.gc.ca/energy-efficiency/energy-star-canada/about/energy-star-announcements/publications/heating-and-cooling-heat-pump/6817> says that new heat pumps work down to -15C to -25C although they become less efficient as it gets colder. Hybrid units with either electric resistive heating or natural gas would likely be required in Calgary.
+
+Although prices and climate seem similar between Alberta and Manitoba, the carbon intensity of our grids are quite different since Manitoba is largely hydro. Natural Resources Canada also his [this report](https://www.hrai.ca/uploads/userfiles/files/final%20-%20ahri%20unitary%20regulatory%20committee%20-%20nrcan%20presentation%20-%202021-01.pdf) looking at what updates need to be made to the standards. They also have the [Air Source Heat Pump Sizing and Selection Guide](https://www.nrcan.gc.ca/maps-tools-and-publications/tools/modelling-tools/toolkit-for-air-source-heat-pump-sizing-and-selection/23558). I found this paper [Economic and energy analysis of domestic ground source heat pump systems in four Canadian cities](https://www.scinapse.io/papers/1866672279#fullText) which has some interesting ways of looking at the problem, although given the non-linearity of heat pump performance with respect to external temperature, I don't think heating days and cooling days are going to work well. You need to take more of a temperature bin approach. 
+
+So that's what I'll do - retrieve historical temperature data and see how many hours are spent at each temperature and combine that with the efficiency curve for a heat pump. 
+
+I wasn't able to find any documentation on how to access Canadian weather data, but I did find a [python library](https://github.com/csianglim/weather-gc-ca-python) that does this. The example they give  <http://climate.weather.gc.ca/climate_data/bulk_data_e.html?format=csv&stationID=51442&Year=2020&Month=01&timeframe=1>. I played around with that url a bit and it looks like weather.gc.ca only allows you to download one month's worth of data at a time. <https://climate.weather.gc.ca/historical_data/search_historic_data_e.html> allows you to find the stations in a particular area, and if you carefully examine the url you can find the stationid. For Calgary there are two stations at the airport CALGARY INT'L CS, and CALGARY INTL A. I don't know the difference between the two so I'll pick the first, stationid 27211.
+
+```{r}
+getyeardata <- function(year, stationid) {
+  months <- seq(1, 12)
+  datalist <- lapply(months, function(month) {
+    read.csv(paste0("http://climate.weather.gc.ca/climate_data/bulk_data_e.html?format=csv&stationID=", stationid, 
+                    "&Year=", year,
+                    "&Month=", month,
+                    "&timeframe=1")) })
+  do.call(rbind, datalist)
+}
+
+stationids <- c(27211, 51442, 27214, 31688, 30165, 43403)
+stationdata <- do.call(rbind, lapply(stationids, function(stationid) { getyeardata(2020, stationid) }))
+
+ggplot(stationdata) +
+  geom_histogram(mapping = aes(x = `Temp...C.`), color = "black", fill = "white", binwidth = 2, na.rm = TRUE) +
+  labs(title = "Temperature Profile for Selected Canadian Cities" ,
+    caption = "Source : Environment and Natural Resoures",
+    x = "Deg C",
+    y = "Number of hours") +
+  theme_bw() +
+  theme(plot.title = element_text(face = "bold", size = "14"), 
+      legend.title = element_blank(), # remove REF_DATE from legend
+      legend.position = "top", 
+      legend.justification = "left",
+      panel.grid.major.x = element_blank() # remove x-grid
+      ) +
+  facet_wrap(~ Station.Name)
+```
+
+I found it really difficult to find curves for real life cold climate heat pumps. Here's one <https://www.nordicghp.com/wp-content/uploads/2021/10/001999MAN-02-ATA-Series-Two-Stage-R410a.pdf>. Lower than -22C is completely dependent on electric resistence heating. It's likely uneconomic long before that and producing more CO2 before then also. The CO2/GJ for the grid is 3x that of natural gas. Currently electricity is almost 5x more expensive per GJ than natural gas. By the end of the decade we're going to be 4x that so a tax if \$8.4/GJ gives a ratio of 2.2.
+
+```{r}
+
+efficiency <- do.call(rbind, lapply(c(25, 35, 45, 55, 65), function(x) {
+  outdoor_temp <- (-40:10)
+  result <- data.frame(outdoor_temp)
+  result$rejection <- x
+  result$efficiency <- (273.15 + x)/(x - result$outdoor_temp)
+  result
+}))
+
+ggplot(efficiency) +
+  geom_line(aes(x = outdoor_temp, y = efficiency, group = rejection, color = as.character(rejection))) +
+  labs(title = "Theoretical Heat Pump efficiency - Heating",
+       x = "Outdoor Temp Deg C",
+       y = "Efficiency",
+       color = "Condenser Temp Deg C")
+
+```
+
+
+What about ground-source heat pumps (I'm extremely happy they stopped calling this geothermal)? 
+
+Statistics Canada. Table 23-10-0066 Sales of fuel used for road motor vehicles, annual
+```{r}
+fuel_sales <- get_cansim("23-10-0066")
+max_ref_date <- max(fuel_sales$REF_DATE)
+fuel_sales <- fuel_sales %>% filter(REF_DATE==max_ref_date, GEO == "Alberta") %>% select(`Type of fuel sales`, val_norm, UOM)
+
+knitr::kable(fuel_sales)
+```
+
+Using the fuel charge rates for gasoline of 0.0884 \$/litre, and diesel (I'm assuming that's heavy fuel oil?) 0.1275 \$/litre. This is roughly \$550MM for gasoline and \$462MM for diesel or roughly one billion. Divided by roughly 1.5 million households in Alberta we get $666/household. A lot of that has to be related to businesses, but I expect most of that would be passed onto consumers (only some of whom would not be in Alberta). 
+
+That doesn't really help us think about the impact of carbon pricing on operating our vehicles, for that we're more interested in our own vehicles and driving habits. Apparently the average distance/year for Alberta is roughly 15k kilometres, if the vehicle uses 10 litres/100km that's roughly \$130/year.
+
+The Alberta electrical grid, according to [Alberta Utility Commission Annual Report](https://www.auc.ab.ca/Shared%20Documents/TotalGeneration.xlsx), is roughly 35% Coal, 55% Natural Gas, and 10% renewables. Alberta and Saskatchewan are outliers in Canada in this respect. Ontario has significant hydro and nuclear. Quebec, Manitoba, BC, and Newfoundland Labrador all have significant hydro resources. We simply don't have the rivers or the geography to make this happen and we've always had ample high quality coal resources.
+
+All of that uses a carbon tax of $40/tonne with the plan being to raise that to \$170/tonne by 2030. That should change the economics for some of these.
+
+Passenger vehicles and space heating are the largest source of our personal carbon emissions, and associated taxes in Alberta. Let's look at passenger vehicles first.
+
+Electric vehicles are the obvious candidate to eliminate CO2 emmisions however, in my opinion, it's been difficult to make the case for them in many parts of Alberta. After graduating university, I lived up north and would regularly make the 7hr drive to Grande Prairie. Even today there are no superchargers north of Edmonton.
+
+Imagine you commute from Canmore or Red Deer, or even Strathmore, you're going to be comfortably within the range of the latest electric vehicles, and given the dramatically lower operating costs, this might work for you. If we chose a relatively high rate of $0.10/kWh and consumption from some [random guy on the internet](https://tekdeeps.com/new-tesla-model-3-long-range-range-measured-at-100-and-130-km-h/) of 20.6 kWh/100km (this is at 130km/h which has to be a worst case scenario). If you drove 15,000 km/year <https://oee.nrcan.gc.ca/corporate/statistics/neud/dpa/calculator/refs.cfm> you'd get around 3MWh/year x 1000 MWh/kWr x \$0.10/kWr \$300/year. I'm pretty sure the carbon tax is baked into the \$0.10/kWr price since it would change moment by moment as the generation mix changes. Still at \$22.8 \$/MWh that's \$68.4 of the \$300. For gasoline, at \$1.379 assuming 10 litres/100km is 1500 litres/year or just over \$2,000/year. We've already calculated the carbon tax portion of this at \$130/year or roughly double what the Model 3 is charged (which also implies half the emissions). So by the end of the decade when carbon taxes have quadrupled you get roughly \$520/year for the ICE vehicle, and \$260 for the electric. I'll let you try and guess what your gasoline price will be.
+
+So a \$1700/year cost savings, soon to be \$2000/year cost savings is significant, maybe it's worth an extra $10,000 on the price of the vehicle, but for me, having never purchased a new vehicle, and driving less than 5000km/year. It's difficult to justify the premium that electric cars currently command. And that's probably as it should be. People that drive a lot would reap the most benefits - it shouldn't be sitting in my garage. Do the subsidies for electric vehicles look at this? Should you have to show that you drive enough to be eligible for the subsidy?
+
+I think this was likely our best candidate for carbon pricing changing our behavior given the fact that gasoline prices contribute so much to the cost savings. Does this mean carbon taxes should be higher to force a change?

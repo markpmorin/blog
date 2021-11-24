@@ -1,0 +1,662 @@
+---
+title: Calculate Electricity Emissions for Canadian Provinces
+author: R package build
+date: '2021-11-21'
+slug: []
+categories: []
+tags: []
+draft: true
+---
+
+<script src="{{< blogdown/postref >}}index_files/header-attrs/header-attrs.js"></script>
+
+
+<pre class="r"><code>library(cansim)
+library(tidyverse)</code></pre>
+<p>In my previous post the different emission intensity of the provinces’ grid turned out to be really important when evaluating the carbon footprint of heat pumps, and to a much lessor extent, battery electric vehicles. Here’s my attempt at calculating this myself. I’m sure this has been done elsewhere, but that’s true about most everything I’m putting in these posts. It’s about the journey, not the destination.</p>
+<p>It turns out Statistics Canada has a data table “25-10-0017 Electric power generation, annual fuel consumed by electric utility thermal plants” that has the fuel consumption for the various plants. Table “25-10-0021 Electric power, electric utilities and industry, annual supply and disposition” has the power consumption. Or we could probably use “25-10-0019
+Electricity from fuels, annual generation by electric utility thermal plants” if we wanted to do this on a per fuel basis. Finally we need emission factors for the various fuels. I couldn’t find a machine friendly source for this, but <a href="https://donnees.ec.gc.ca/data/substances/monitor/canada-s-official-greenhouse-gas-inventory/Emission_Factors.pdf" class="uri">https://donnees.ec.gc.ca/data/substances/monitor/canada-s-official-greenhouse-gas-inventory/Emission_Factors.pdf</a> seems to have all the details we need.</p>
+<p>Also we need to convert those CH4 and N2O factors to CO2 equivalents. <a href="https://www.canada.ca/en/environment-climate-change/services/climate-change/greenhouse-gas-emissions/quantification-guidance/global-warming-potentials.html" class="uri">https://www.canada.ca/en/environment-climate-change/services/climate-change/greenhouse-gas-emissions/quantification-guidance/global-warming-potentials.html</a> has this information, which comes from the IPCC’s Fourth Assessment report using the 100yr time horizon.</p>
+<p>I had to make some guesses as to what some of the fuels named in table 25-10-0017. Who knows, maybe someone with actual knowledge of this stuff will drop a hint.</p>
+<pre class="r"><code># from https://donnees.ec.gc.ca/data/substances/monitor/canada-s-official-greenhouse-gas-inventory/Emission_Factors.pdf
+# using values for electric utilities. If a value is valid for all provinces, create an entry for each province.
+# Name and have been adjusted to match those used in table 25-10-0017. Conversion factor to match units.
+
+# Table A6.1–1 for marketable
+# Table A6.1–3 for CH4 and N2O emission factors
+# 0.000,001 as the conversion factor seems 1000 times too small. We&#39;re trying to get to kg/MWh. If unit from 
+# Table A6.1-1 is g/m3 and val_norm from Table 25-10-0017 is m3 then to get kg we g/m3 x 1 kg / 1000g 
+# That&#39;s why this is draft right now
+natgas_emission_factors &lt;- data.frame(fuel = &quot;Natural gas&quot;,
+                               unit = &quot;g/m3&quot;,
+                               conversionfactor = 0.000001,
+                               province = c(&quot;NL&quot;, &quot;NS&quot;, &quot;NB&quot;, &quot;QC&quot;, &quot;ON&quot;, &quot;MB&quot;, &quot;SK&quot;, &quot;AB&quot;, &quot;BC&quot;, &quot;YT&quot;, &quot;NT&quot;),
+                               co2 = c(1901, 1901, 1901, 1887, 1888, 1886, 1829, 1928, 1926, 1901, 1901),
+                               ch4 = 0.49,
+                               n2o = 0.049)
+
+# I&#39;m not sure what the difference between methane and natural gas is from an emissions perspective. Maybe this is biogas?
+# Not that I&#39;d know what to do with biogas either
+methane_emission_factors &lt;- data.frame(fuel = &quot;Methane&quot;,
+                               unit = &quot;g/m3&quot;,
+                               conversionfactor = 0.000001,
+                               province = c(&quot;QC&quot;, &quot;ON&quot;, &quot;AB&quot;, &quot;BC&quot;),
+                               co2 = c(1887, 1888, 1928, 1926),
+                               ch4 = 0.49,
+                               n2o = 0.049)
+
+# I don&#39;t know what &quot;Oother gaseous fuel&quot; is, but BC and Alberta have a lot of it
+# Is it biogas? I&#39;m using the same factors as Natural gas
+other_gaseous_emission_factors &lt;- data.frame(fuel = &quot;Other gaseous fuels&quot;,
+                               unit = &quot;g/m3&quot;,
+                               conversionfactor = 0.000001,
+                               province = c(&quot;AB&quot;, &quot;BC&quot;),
+                               co2 = c(1928, 1926),
+                               ch4 = 0.49,
+                               n2o = 0.049)
+
+# conversion factor for tonne/kilolitre
+light_fuel_oil_emission_factor &lt;- data.frame(fuel = &quot;Light fuel oil&quot;,
+                                                 unit = &quot;g/L&quot;,
+                                                 conversionfactor = 0.001,
+                                                 province = c(&quot;NL&quot;, &quot;NS&quot;, &quot;NB&quot;, &quot;QC&quot;, &quot;ON&quot;, &quot;MB&quot;, &quot;SK&quot;, &quot;AB&quot;, &quot;BC&quot;, &quot;YT&quot;, &quot;NT&quot;, &quot;PE&quot;),
+                                                 co2 = 2753,
+                                                 ch4 = 0.18,
+                                                 n2o = 0.031)
+
+# conversion factor for tonne/kilolitre
+heavy_fuel_oil_emission_factor &lt;- data.frame(fuel = &quot;Canadian heavy fuel oil&quot;,
+                               unit = &quot;g/L&quot;,
+                               conversionfactor = 0.001,
+                               province = c(&quot;NL&quot;, &quot;NS&quot;, &quot;NB&quot;, &quot;QC&quot;, &quot;ON&quot;, &quot;MB&quot;, &quot;SK&quot;, &quot;AB&quot;, &quot;BC&quot;, &quot;YT&quot;, &quot;NT&quot;, &quot;PE&quot;),
+                               co2 = 3156,
+                               ch4 = 0.034,
+                               n2o = 0.064)
+
+# conversion factor for tonne/kilolitre
+imported_fuel_oil_emission_factor &lt;- data.frame(fuel = &quot;Imported heavy fuel oil&quot;,
+                               unit = &quot;g/L&quot;,
+                               conversionfactor = 0.001,
+                               province = c(&quot;NL&quot;, &quot;NS&quot;, &quot;NB&quot;, &quot;QC&quot;, &quot;ON&quot;, &quot;MB&quot;, &quot;SK&quot;, &quot;AB&quot;, &quot;BC&quot;, &quot;YT&quot;, &quot;NT&quot;, &quot;PE&quot;),
+                               co2 = 3156,
+                               ch4 = 0.034,
+                               n2o = 0.064)
+
+diesel_emission_factor &lt;- data.frame(fuel = &quot;Diesel&quot;,
+                               unit = &quot;g/L&quot;,
+                               conversionfactor = 0.001,
+                               province = c(&quot;NL&quot;, &quot;NS&quot;, &quot;NB&quot;, &quot;QC&quot;, &quot;ON&quot;, &quot;MB&quot;, &quot;SK&quot;, &quot;AB&quot;, &quot;BC&quot;, &quot;YT&quot;, &quot;NT&quot;, &quot;NU&quot;, &quot;PE&quot;),
+                               co2 = 2681,
+                               ch4 = 0.078,
+                               n2o = 0.022)
+
+# Table A6.6–1: Emission Factors for Biomass
+# conversion factor is for tonne/tonne
+wood_emission_factor &lt;- data.frame(fuel = &quot;Wood&quot;,
+                                   unit = &quot;g/kg&quot;,
+                                   conversionfactor = 0.001,
+                                   province = c(&quot;NL&quot;, &quot;NS&quot;, &quot;NB&quot;, &quot;QC&quot;, &quot;ON&quot;, &quot;MB&quot;, &quot;SK&quot;, &quot;AB&quot;, &quot;BC&quot;, &quot;YT&quot;, &quot;NT&quot;, &quot;PE&quot;),
+                                   co2 = 1715,
+                                   ch4 = 0.1,
+                                   n2o = 0.07)
+
+# using wood emission factors for &quot;Other solid fuels&quot;
+other_solid_emission_factor &lt;- data.frame(fuel = &quot;Other solid fuels&quot;,
+                                   unit = &quot;g/kg&quot;,
+                                   conversionfactor = 0.001,
+                                   province = c(&quot;NL&quot;, &quot;NS&quot;, &quot;NB&quot;, &quot;QC&quot;, &quot;ON&quot;, &quot;MB&quot;, &quot;SK&quot;, &quot;AB&quot;, &quot;BC&quot;, &quot;YT&quot;, &quot;NT&quot;, &quot;PE&quot;),
+                                   co2 = 1715,
+                                   ch4 = 0.1,
+                                   n2o = 0.07)
+
+# Table A6.1–9: CO2 Emission Factors for Coal
+# Table A6.1–11: CH4 and N2O Emission Factors for Coal
+bitumous_emission_factor &lt;- data.frame(fuel = &quot;Canadian bituminous coal&quot;,
+                                      unit = &quot;kg/tonne&quot;,
+                                      conversionfactor = 0.001,
+                                      province = c(&quot;NL&quot;, &quot;NS&quot;, &quot;NB&quot;, &quot;QC&quot;, &quot;ON&quot;, &quot;SK&quot;, &quot;AB&quot;, &quot;BC&quot;),
+                                      co2 = c(2185, 2329, 2198, 2198, 2198, 2198, 2198, 2198),
+                                      ch4 = 0.02,
+                                      n2o = 0.03)
+
+subbitumous_emission_factor &lt;- data.frame(fuel = &quot;Canadian subbituminous coal&quot;,
+                                          unit = &quot;kg/tonne&quot;,
+                                          conversionfactor = 0.001,
+                                          province = &quot;AB&quot;,
+                                          co2 = 1763,
+                                          ch4 = 0.02,
+                                          n2o = 0.03)
+
+#   Imported subbituminous coal - using foreign bitumous since that seems to be where NB gets their coal
+imported_sub_emission_factor &lt;- data.frame(fuel = &quot;Imported subbituminous coal&quot;,
+                                          unit = &quot;kg/tonne&quot;,
+                                          conversionfactor = 0.001,
+                                          province = c(&quot;NS&quot;,&quot;NB&quot;, &quot;ON&quot;, &quot;MB&quot;),
+                                          co2 = 2540,
+                                          ch4 = 0.02,
+                                          n2o = 0.03)
+
+#   Imported subbituminous coal - using foreign bitumous since that seems to be where NS gets their coal
+imported_bit_emission_factor &lt;- data.frame(fuel = &quot;Imported bituminous coal&quot;,
+                                          unit = &quot;kg/tonne&quot;,
+                                          conversionfactor = 0.001,
+                                          province = &quot;NS&quot;,
+                                          co2 = 2540,
+                                          ch4 = 0.02,
+                                          n2o = 0.03)
+
+lignite_emission_factor &lt;- data.frame(fuel = &quot;Lignite&quot;,
+                                          unit = &quot;kg/tonne&quot;,
+                                          conversionfactor = 0.001,
+                                          province = &quot;SK&quot;,
+                                          co2 = 1457,
+                                          ch4 = 0.02,
+                                          n2o = 0.03)
+
+petroleum_coke_emission_factor &lt;- data.frame(fuel = &quot;Petroleum coke&quot;,
+                                          unit = &quot;g/L&quot;,
+                                          conversionfactor = 0.001,
+                                          province = c(&quot;NS&quot;, &quot;NB&quot;),
+                                          co2 = 3761,
+                                          ch4 = 0,
+                                          n2o = 24)
+
+emission_factors &lt;- rbind(natgas_emission_factors, 
+                          methane_emission_factors,
+                          other_gaseous_emission_factors,
+                          light_fuel_oil_emission_factor,
+                          heavy_fuel_oil_emission_factor,
+                          imported_fuel_oil_emission_factor,
+                          diesel_emission_factor,
+                          wood_emission_factor,
+                          other_solid_emission_factor,
+                          bitumous_emission_factor,
+                          subbitumous_emission_factor,
+                          imported_sub_emission_factor,
+                          imported_bit_emission_factor,
+                          lignite_emission_factor,
+                          petroleum_coke_emission_factor)
+
+fuels &lt;- get_cansim(&quot;25-10-0017&quot;)
+greenhouse &lt;- get_cansim(&quot;38-10-0111&quot;)
+fuels &lt;- add_provincial_abbreviations(fuels)
+generation &lt;- get_cansim(&quot;25-10-0021&quot;)
+generation &lt;- add_provincial_abbreviations(generation)
+
+fuels &lt;- fuels %&gt;% filter(!grepl(&quot;Total.+&quot;, `Fuel consumed for electric power generation`), 
+                          GEO.abb != &quot;CAN&quot;, !is.na(val_norm), 
+                          REF_DATE == 2020,
+                          val_norm != 0) %&gt;%
+  left_join(emission_factors, by = c(&quot;Fuel consumed for electric power generation&quot; = &quot;fuel&quot;, &quot;GEO.abb&quot; = &quot;province&quot;))
+
+# goal of conversion factor is to get tonnes of CO2e
+fuels &lt;- fuels %&gt;% mutate(co2_tonne = val_norm * conversionfactor * co2,
+                          ch4_tonne = val_norm * conversionfactor * ch4 * 25,
+                          n2o_tonne = val_norm * conversionfactor * n2o * 298,
+                          total_emissions = co2_tonne + ch4_tonne + n2o_tonne)
+
+province_emissions &lt;- fuels %&gt;% filter(!is.na(co2_tonne)) %&gt;% group_by(GEO.abb) %&gt;% summarize(total_emissions = sum(total_emissions))
+intensity &lt;- generation %&gt;% filter(`Electric power, components` == &quot;Total generation of electricity&quot;, REF_DATE == 2020, GEO != &quot;Canada&quot;) %&gt;%
+  left_join(province_emissions) %&gt;% mutate(tonnes_per_mwh = total_emissions / val_norm)
+
+knitr::kable(intensity)</code></pre>
+<table>
+<colgroup>
+<col width="2%" />
+<col width="5%" />
+<col width="2%" />
+<col width="3%" />
+<col width="1%" />
+<col width="3%" />
+<col width="2%" />
+<col width="2%" />
+<col width="2%" />
+<col width="2%" />
+<col width="1%" />
+<col width="1%" />
+<col width="2%" />
+<col width="2%" />
+<col width="1%" />
+<col width="4%" />
+<col width="11%" />
+<col width="9%" />
+<col width="7%" />
+<col width="5%" />
+<col width="2%" />
+<col width="2%" />
+<col width="7%" />
+<col width="4%" />
+<col width="1%" />
+<col width="3%" />
+<col width="3%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="left">REF_DATE</th>
+<th align="left">GEO</th>
+<th align="left">DGUID</th>
+<th align="left">UOM</th>
+<th align="left">UOM_ID</th>
+<th align="left">SCALAR_FACTOR</th>
+<th align="left">SCALAR_ID</th>
+<th align="left">VECTOR</th>
+<th align="left">COORDINATE</th>
+<th align="right">VALUE</th>
+<th align="left">STATUS</th>
+<th align="left">SYMBOL</th>
+<th align="left">TERMINATED</th>
+<th align="left">DECIMALS</th>
+<th align="left">GeoUID</th>
+<th align="left">Hierarchy for GEO</th>
+<th align="left">Classification Code for Electric power, components</th>
+<th align="left">Hierarchy for Electric power, components</th>
+<th align="left">Classification Code for Estimates</th>
+<th align="left">Hierarchy for Estimates</th>
+<th align="right">val_norm</th>
+<th align="left">Date</th>
+<th align="left">Electric power, components</th>
+<th align="left">Estimates</th>
+<th align="left">GEO.abb</th>
+<th align="right">total_emissions</th>
+<th align="right">tonnes_per_mwh</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">2020</td>
+<td align="left">Newfoundland and Labrador</td>
+<td align="left">2016A000210</td>
+<td align="left">Megawatt hours</td>
+<td align="left">210</td>
+<td align="left">units</td>
+<td align="left">0</td>
+<td align="left">v52300733</td>
+<td align="left">2.1.1</td>
+<td align="right">40211797</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">0</td>
+<td align="left">10</td>
+<td align="left">1.2</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="right">40211797</td>
+<td align="left">2020-07-01</td>
+<td align="left">Total generation of electricity</td>
+<td align="left">Electricity quantity</td>
+<td align="left">NL</td>
+<td align="right">9.519037e+05</td>
+<td align="right">0.0236722</td>
+</tr>
+<tr class="even">
+<td align="left">2020</td>
+<td align="left">Prince Edward Island</td>
+<td align="left">2016A000211</td>
+<td align="left">Megawatt hours</td>
+<td align="left">210</td>
+<td align="left">units</td>
+<td align="left">0</td>
+<td align="left">v52300752</td>
+<td align="left">3.1.1</td>
+<td align="right">661519</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">0</td>
+<td align="left">11</td>
+<td align="left">1.3</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="right">661519</td>
+<td align="left">2020-07-01</td>
+<td align="left">Total generation of electricity</td>
+<td align="left">Electricity quantity</td>
+<td align="left">PE</td>
+<td align="right">2.545399e+02</td>
+<td align="right">0.0003848</td>
+</tr>
+<tr class="odd">
+<td align="left">2020</td>
+<td align="left">Nova Scotia</td>
+<td align="left">2016A000212</td>
+<td align="left">Megawatt hours</td>
+<td align="left">210</td>
+<td align="left">units</td>
+<td align="left">0</td>
+<td align="left">v52300770</td>
+<td align="left">4.1.1</td>
+<td align="right">9532578</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">0</td>
+<td align="left">12</td>
+<td align="left">1.4</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="right">9532578</td>
+<td align="left">2020-07-01</td>
+<td align="left">Total generation of electricity</td>
+<td align="left">Electricity quantity</td>
+<td align="left">NS</td>
+<td align="right">9.131575e+06</td>
+<td align="right">0.9579334</td>
+</tr>
+<tr class="even">
+<td align="left">2020</td>
+<td align="left">New Brunswick</td>
+<td align="left">2016A000213</td>
+<td align="left">Megawatt hours</td>
+<td align="left">210</td>
+<td align="left">units</td>
+<td align="left">0</td>
+<td align="left">v52300798</td>
+<td align="left">5.1.1</td>
+<td align="right">12606217</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">0</td>
+<td align="left">13</td>
+<td align="left">1.5</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="right">12606217</td>
+<td align="left">2020-07-01</td>
+<td align="left">Total generation of electricity</td>
+<td align="left">Electricity quantity</td>
+<td align="left">NB</td>
+<td align="right">6.273640e+06</td>
+<td align="right">0.4976624</td>
+</tr>
+<tr class="odd">
+<td align="left">2020</td>
+<td align="left">Quebec</td>
+<td align="left">2016A000224</td>
+<td align="left">Megawatt hours</td>
+<td align="left">210</td>
+<td align="left">units</td>
+<td align="left">0</td>
+<td align="left">v52300826</td>
+<td align="left">6.1.1</td>
+<td align="right">208422894</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">0</td>
+<td align="left">24</td>
+<td align="left">1.6</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="right">208422894</td>
+<td align="left">2020-07-01</td>
+<td align="left">Total generation of electricity</td>
+<td align="left">Electricity quantity</td>
+<td align="left">QC</td>
+<td align="right">2.615367e+06</td>
+<td align="right">0.0125484</td>
+</tr>
+<tr class="even">
+<td align="left">2020</td>
+<td align="left">Ontario</td>
+<td align="left">2016A000235</td>
+<td align="left">Megawatt hours</td>
+<td align="left">210</td>
+<td align="left">units</td>
+<td align="left">0</td>
+<td align="left">v52300854</td>
+<td align="left">7.1.1</td>
+<td align="right">152651786</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">0</td>
+<td align="left">35</td>
+<td align="left">1.7</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="right">152651786</td>
+<td align="left">2020-07-01</td>
+<td align="left">Total generation of electricity</td>
+<td align="left">Electricity quantity</td>
+<td align="left">ON</td>
+<td align="right">5.022530e+06</td>
+<td align="right">0.0329019</td>
+</tr>
+<tr class="odd">
+<td align="left">2020</td>
+<td align="left">Manitoba</td>
+<td align="left">2016A000246</td>
+<td align="left">Megawatt hours</td>
+<td align="left">210</td>
+<td align="left">units</td>
+<td align="left">0</td>
+<td align="left">v52300884</td>
+<td align="left">8.1.1</td>
+<td align="right">37253694</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">0</td>
+<td align="left">46</td>
+<td align="left">1.8</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="right">37253694</td>
+<td align="left">2020-07-01</td>
+<td align="left">Total generation of electricity</td>
+<td align="left">Electricity quantity</td>
+<td align="left">MB</td>
+<td align="right">2.827777e+04</td>
+<td align="right">0.0007591</td>
+</tr>
+<tr class="even">
+<td align="left">2020</td>
+<td align="left">Saskatchewan</td>
+<td align="left">2016A000247</td>
+<td align="left">Megawatt hours</td>
+<td align="left">210</td>
+<td align="left">units</td>
+<td align="left">0</td>
+<td align="left">v52300914</td>
+<td align="left">9.1.1</td>
+<td align="right">24370710</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">0</td>
+<td align="left">47</td>
+<td align="left">1.9</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="right">24370710</td>
+<td align="left">2020-07-01</td>
+<td align="left">Total generation of electricity</td>
+<td align="left">Electricity quantity</td>
+<td align="left">SK</td>
+<td align="right">1.440365e+07</td>
+<td align="right">0.5910231</td>
+</tr>
+<tr class="odd">
+<td align="left">2020</td>
+<td align="left">Alberta</td>
+<td align="left">2016A000248</td>
+<td align="left">Megawatt hours</td>
+<td align="left">210</td>
+<td align="left">units</td>
+<td align="left">0</td>
+<td align="left">v52300639</td>
+<td align="left">10.1.1</td>
+<td align="right">75946217</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">0</td>
+<td align="left">48</td>
+<td align="left">1.10</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="right">75946217</td>
+<td align="left">2020-07-01</td>
+<td align="left">Total generation of electricity</td>
+<td align="left">Electricity quantity</td>
+<td align="left">AB</td>
+<td align="right">3.748384e+07</td>
+<td align="right">0.4935577</td>
+</tr>
+<tr class="even">
+<td align="left">2020</td>
+<td align="left">British Columbia</td>
+<td align="left">2016A000259</td>
+<td align="left">Megawatt hours</td>
+<td align="left">210</td>
+<td align="left">units</td>
+<td align="left">0</td>
+<td align="left">v52300667</td>
+<td align="left">11.1.1</td>
+<td align="right">70945230</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">0</td>
+<td align="left">59</td>
+<td align="left">1.11</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="right">70945230</td>
+<td align="left">2020-07-01</td>
+<td align="left">Total generation of electricity</td>
+<td align="left">Electricity quantity</td>
+<td align="left">BC</td>
+<td align="right">1.747849e+06</td>
+<td align="right">0.0246366</td>
+</tr>
+<tr class="odd">
+<td align="left">2020</td>
+<td align="left">Yukon</td>
+<td align="left">2016A000260</td>
+<td align="left">Megawatt hours</td>
+<td align="left">210</td>
+<td align="left">units</td>
+<td align="left">0</td>
+<td align="left">v52300697</td>
+<td align="left">12.1.1</td>
+<td align="right">532078</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">0</td>
+<td align="left">60</td>
+<td align="left">1.12</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="right">532078</td>
+<td align="left">2020-07-01</td>
+<td align="left">Total generation of electricity</td>
+<td align="left">Electricity quantity</td>
+<td align="left">YT</td>
+<td align="right">5.298729e+04</td>
+<td align="right">0.0995856</td>
+</tr>
+<tr class="even">
+<td align="left">2020</td>
+<td align="left">Northwest Territories</td>
+<td align="left">2016A000261</td>
+<td align="left">Megawatt hours</td>
+<td align="left">210</td>
+<td align="left">units</td>
+<td align="left">0</td>
+<td align="left">v52300709</td>
+<td align="left">13.1.1</td>
+<td align="right">683973</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">0</td>
+<td align="left">61</td>
+<td align="left">1.13</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="right">683973</td>
+<td align="left">2020-07-01</td>
+<td align="left">Total generation of electricity</td>
+<td align="left">Electricity quantity</td>
+<td align="left">NT</td>
+<td align="right">6.149244e+04</td>
+<td align="right">0.0899048</td>
+</tr>
+<tr class="odd">
+<td align="left">2020</td>
+<td align="left">Nunavut</td>
+<td align="left">2016A000262</td>
+<td align="left">Megawatt hours</td>
+<td align="left">210</td>
+<td align="left">units</td>
+<td align="left">0</td>
+<td align="left">v52300723</td>
+<td align="left">14.1.1</td>
+<td align="right">194462</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">NA</td>
+<td align="left">0</td>
+<td align="left">62</td>
+<td align="left">1.14</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="left">NA</td>
+<td align="left">1</td>
+<td align="right">194462</td>
+<td align="left">2020-07-01</td>
+<td align="left">Total generation of electricity</td>
+<td align="left">Electricity quantity</td>
+<td align="left">NU</td>
+<td align="right">1.493079e+05</td>
+<td align="right">0.7678000</td>
+</tr>
+</tbody>
+</table>
+<pre class="r"><code># attempt to calculate portion of CO2/MWh from each fuel source. I&#39;m not sure how to visualize this. I&#39;d like to do something where I show 
+# how much more carbon is emitted by coal vs CO2 use real historical data
+fromfuels &lt;- get_cansim(&quot;25-10-0019&quot;)</code></pre>
+<pre><code>## Accessing CANSIM NDM product 25-10-0019 from Statistics Canada</code></pre>
+<pre><code>## Parsing data</code></pre>
+<pre class="r"><code>fromfuels &lt;- add_provincial_abbreviations(fromfuels)
+lastyear &lt;- max(fromfuels$REF_DATE)
+toplevel &lt;- fromfuels %&gt;% filter(GEO != &quot;Canada&quot;,
+                                 val_norm != 0,
+                                 !is.na(val_norm),
+                                  !grepl(&quot;\\.&quot;, `Hierarchy for Electricity generated from fuels`))
+
+toplevel &lt;- toplevel %&gt;% group_by(GEO.abb) %&gt;% mutate(percentage = val_norm/sum(val_norm)) %&gt;% ungroup()
+
+ggplot(toplevel) +
+  geom_line(mapping = aes(x = REF_DATE, y = percentage, group = GEO.abb, fill = `Electricity generated from fuels`))</code></pre>
+<pre><code>## Warning: Ignoring unknown aesthetics: fill</code></pre>
+<p><img src="{{< blogdown/postref >}}index_files/figure-html/unnamed-chunk-2-1.png" width="672" />
+```</p>

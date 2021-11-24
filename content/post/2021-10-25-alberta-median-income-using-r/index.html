@@ -46,7 +46,9 @@ if (file.exists(cacheFilepath)) {
   zipfile = tempfile()
   download.file(&quot;https://www150.statcan.gc.ca/n1/tbl/csv/11100190-eng.zip&quot;, zipfile)
   unzip(zipfile, exdir = dirname(zipfile))
-  table11100190 = read.csv(file.path(dirname(zipfile), &quot;11100190.csv&quot;))
+  # Note check.names to avoid having column names fixed up with periods
+  # to produce proper R identifies. This requires we use backticks to access these columns
+  table11100190 = read.csv(file.path(dirname(zipfile), &quot;11100190.csv&quot;), check.names = FALSE)
   dir.create(cachePath, recursive = TRUE, showWarnings = FALSE)
   saveRDS(table11100190, cacheFilepath)
 }
@@ -65,8 +67,8 @@ knitr::kable(head(table11100190[,1:5]))</code></pre>
 <th align="right">REF_DATE</th>
 <th align="left">GEO</th>
 <th align="left">DGUID</th>
-<th align="left">Income.concept</th>
-<th align="left">Economic.family.type</th>
+<th align="left">Income concept</th>
+<th align="left">Economic family type</th>
 </tr>
 </thead>
 <tbody>
@@ -116,10 +118,10 @@ knitr::kable(head(table11100190[,1:5]))</code></pre>
 </table>
 <p>It’s not clear from the CBC article which Economic Family type is being used, but looking at the data, “Alberta Economic families and persons not in an economic family” seems to be the likeliest one.</p>
 <pre class="r"><code>knitr::kable(table11100190[table11100190$REF_DATE==2015 &amp; 
-                      table11100190$`Income.concept`==&quot;Median after-tax income&quot; &amp;
+                      table11100190$`Income concept`==&quot;Median after-tax income&quot; &amp;
                       table11100190$GEO==&quot;Alberta&quot; &amp;
                       !is.na(table11100190$VALUE), 
-                      c(&quot;REF_DATE&quot;, &quot;GEO&quot;, &quot;Economic.family.type&quot;, &quot;VALUE&quot;)])</code></pre>
+                      c(&quot;REF_DATE&quot;, &quot;GEO&quot;, &quot;Economic family type&quot;, &quot;VALUE&quot;)])</code></pre>
 <table>
 <colgroup>
 <col width="8%" />
@@ -133,7 +135,7 @@ knitr::kable(head(table11100190[,1:5]))</code></pre>
 <th align="left"></th>
 <th align="right">REF_DATE</th>
 <th align="left">GEO</th>
-<th align="left">Economic.family.type</th>
+<th align="left">Economic family type</th>
 <th align="right">VALUE</th>
 </tr>
 </thead>
@@ -280,14 +282,14 @@ knitr::kable(head(table11100190[,1:5]))</code></pre>
 </tr>
 </tbody>
 </table>
-<p>A slight difference between the data in the CBC graphic and what we’re working with, is that they’re using data in “2018 constant dollars” and as of the time I’m writing this, that data set is reporting “2019 constant dollars”. I could convert but it’s probably not important for what I’m trying to do.</p>
+<p>A slight difference between the data in the CBC graphic and what we’re working with, is that they’re using data in “2018 constant dollars” and as of the time I’m writing this, that data set is reporting “2019 constant dollars”.</p>
 <p>The Statcan dataset has a lot more information than just provincial data. It has data for most of the major cities, and data aggregated for some of the regions. So, in additional to filtering by Economic family type, and Income concept, we need to filter by GEO.</p>
 <p>Putting all this together, I can make my first attempt a the chart.</p>
 <pre class="r"><code>provinces &lt;- c(&quot;Canada&quot;, &quot;British Columbia&quot;, &quot;Alberta&quot;, &quot;Saskatchewan&quot;, &quot;Manitoba&quot;, &quot;Ontario&quot;, &quot;Quebec&quot;, &quot;New Brunswick&quot;, &quot;Nova Scotia&quot;, &quot;Prince Edward Island&quot;, &quot;Newfoundland and Labrador&quot;)
 
 medianincome = table11100190[(table11100190$REF_DATE == 2015 | table11100190$REF_DATE == 2018) &amp;
-                        table11100190$`Economic.family.type` == &quot;Economic families and persons not in an economic family&quot; &amp;
-                        table11100190$`Income.concept` == &quot;Median after-tax income&quot; &amp;
+                        table11100190$`Economic family type` == &quot;Economic families and persons not in an economic family&quot; &amp;
+                        table11100190$`Income concept` == &quot;Median after-tax income&quot; &amp;
                         table11100190$GEO %in% provinces, ]
 
 barplot(VALUE ~ REF_DATE + GEO, medianincome, beside = TRUE)</code></pre>
